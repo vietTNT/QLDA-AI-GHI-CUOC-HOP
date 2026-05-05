@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.config import settings
 from app.schemas import ProcessResponse
 from app.services.audio import normalize_audio
 from app.services.diarization import attach_speakers, diarization_service
 from app.services.llm_service import llm_service
-from app.services.stt import stt_service
+from app.services.stt import get_audio_duration, stt_service
 from app.services.summarization import summarization_service
 from app.services.text_quality import LOW_INFORMATION_SUMMARY, is_low_information_transcript
 from app.services.translation import Direction, translation_service
@@ -27,19 +28,46 @@ def process_meeting_audio(
     translate_to: Direction | None = None,
     include_summary: bool = True,
     include_llm: bool = True,
+    num_speakers: int | None = None,
+    meeting_context: str | None = None,
 ) -> ProcessResponse:
     warnings: list[str] = []
     normalized_audio = normalize_audio(input_audio_path)
     transcript = stt_service.transcribe(normalized_audio, language=language)
+    original_transcript = transcript
+    transcript_correction = None
+
+    if include_llm and transcript.text.strip():
+        transcript_correction = llm_service.correct_transcript(
+            transcript,
+            meeting_context=meeting_context or settings.meeting_context,
+        )
+        if transcript_correction.corrected_transcript is not None and not transcript_correction.error:
+            transcript = transcript_correction.corrected_transcript
+            if transcript.text != original_transcript.text:
+                warnings.append("Transcript was corrected by the local LLM. Review against the audio if exact wording matters.")
+        elif transcript_correction.error:
+            warnings.append(f"Transcript correction failed: {transcript_correction.error}")
+
     low_information = is_low_information_transcript(transcript.text)
 
     diarization = None
     if include_diarization:
         try:
-            diarization = diarization_service.diarize(normalized_audio)
+            audio_duration = get_audio_duration(normalized_audio)
+            diarization = diarization_service.diarize(normalized_audio, num_speakers=num_speakers)
             transcript = transcript.model_copy(
                 update={"segments": attach_speakers(transcript.segments, diarization.segments)}
             )
+            unique_speakers = {segment.speaker for segment in diarization.segments}
+            if not diarization.segments and audio_duration < settings.min_diarization_duration_seconds:
+                warnings.append(
+                    f"Diarization skipped because the recording is shorter than {settings.min_diarization_duration_seconds:.0f} seconds."
+                )
+            elif len(unique_speakers) <= 1 and num_speakers is None:
+                warnings.append(
+                    "Diarization detected one speaker. If this recording has multiple speakers, set the speaker count before processing."
+                )
         except Exception as exc:
             warnings.append(f"Diarization failed: {exc}")
 
@@ -77,12 +105,15 @@ def process_meeting_audio(
             merged_transcript=merged_transcript,
             existing_summary=llm_existing_summary,
             translated_transcript=None if language_hint.startswith("vi") else translated_transcript,
+            meeting_context=meeting_context or settings.meeting_context,
         )
         if llm.error:
             warnings.append(f"LLM refinement failed: {llm.error}")
 
     return ProcessResponse(
         transcript=transcript,
+        original_transcript=original_transcript if original_transcript.text != transcript.text else None,
+        transcript_correction=transcript_correction,
         diarization=diarization,
         merged_transcript=merged_transcript,
         translated_transcript=translated_transcript,

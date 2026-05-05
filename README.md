@@ -38,16 +38,19 @@ The root page is the meeting recorder UI. It records microphone audio in the bro
 - Press `Stop`.
 - Press `Process`.
 - Review transcript, speakers, translation, and summary.
+- After diarization finishes, type real names in the speaker label fields to rename `SPEAKER_00`, `SPEAKER_01`, etc. The visible summary, transcript, action items, and copied output use those labels.
 
 ## Notes
 
 - Inference is configured for CPU.
 - STT uses `models/stt/PhoWhisper-medium-ct2-int8`.
 - Diarization uses local pyannote and preloads audio waveform to avoid direct `torchcodec` decoding on Windows.
-- FFmpeg must be available on PATH, or set `FFMPEG_BINARY` to the full `ffmpeg.exe` path.
+- FFmpeg is resolved from `FFMPEG_BINARY`, PATH, local WinGet installs, or the bundled `imageio-ffmpeg` package.
 - LLM refinement uses local Ollama. Defaults:
   - `OLLAMA_BASE_URL=http://127.0.0.1:11434`
-  - `OLLAMA_MODEL=qwen2.5:3b`
+  - `OLLAMA_MODEL=qwen3.5:9b`
+- When LLM is enabled, the app first asks Ollama to correct likely Vietnamese ASR errors in the transcript before translation, summary, and meeting-minutes generation. The original ASR transcript is still returned in the API response as `original_transcript` when corrections change the text.
+- Add project terms, names, and common phrases in the UI `Project context` field to help the local LLM correct ASR mistakes without inventing new meeting facts.
   - `OLLAMA_TIMEOUT_SECONDS=120`
 
 ## LLM Test

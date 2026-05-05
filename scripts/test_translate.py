@@ -78,6 +78,9 @@ def main() -> int:
     try:
         tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
         model = AutoModelForSeq2SeqLM.from_pretrained(str(model_dir), local_files_only=True)
+        model.generation_config.max_length = None
+        if hasattr(model.config, "max_length"):
+            model.config.max_length = None
         model.to("cpu")
         model.eval()
         inputs = tokenizer(text, return_tensors="pt", truncation=True)

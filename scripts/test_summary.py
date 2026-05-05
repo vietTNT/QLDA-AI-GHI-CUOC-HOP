@@ -70,6 +70,14 @@ def main() -> int:
     try:
         tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
         model = AutoModelForSeq2SeqLM.from_pretrained(str(model_dir), local_files_only=True)
+        model.generation_config.max_length = None
+        model.generation_config.min_length = None
+        if model.generation_config.forced_bos_token_id is None and tokenizer.bos_token_id is not None:
+            model.generation_config.forced_bos_token_id = tokenizer.bos_token_id
+        if hasattr(model.config, "max_length"):
+            model.config.max_length = None
+        if hasattr(model.config, "min_length"):
+            model.config.min_length = None
         model.to("cpu")
         model.eval()
         inputs = tokenizer(args.text, return_tensors="pt", truncation=True, max_length=1024)

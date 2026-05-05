@@ -3,127 +3,396 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Ghi biên bản cuộc họp</title>
+    <title>AI Ghi Biên Bản Cuộc Họp</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar" aria-label="Application header">
-        <div>
-          <p class="eyebrow">Local CPU Workspace</p>
-          <h1>AI ghi biên bản và tổng hợp cuộc họp</h1>
+    <header class="app-header" aria-label="Thanh tiêu đề ứng dụng">
+      <div class="header-inner">
+        <div class="brand-block">
+          <h1>AI Ghi Biên Bản Cuộc Họp</h1>
+          <p>Hệ thống AI ghi âm, chuyển lời nói thành văn bản và tóm tắt cuộc họp</p>
         </div>
-        <div class="system-strip" id="modelStatus" aria-live="polite">
-          <span class="dot pending"></span>
-          <span>Checking models</span>
+        <div class="header-actions" aria-label="Trạng thái hệ thống và thao tác nhanh">
+          <div class="system-badge" id="modelStatus" aria-live="polite">
+            <span class="dot pending"></span>
+            <span>Checking models</span>
+          </div>
+          <div class="system-badge muted">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path>
+            </svg>
+            <span>Local mode</span>
+          </div>
+          <button class="icon-only" type="button" aria-label="Cài đặt">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6c.43-.18.78-.4 1-.6.36-.31.56-.71.6-1.1V3a2 2 0 0 1 4 0v.09c.04.39.24.79.6 1.1.22.2.57.42 1 .6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.43.4.78.6 1 .31.36.71.56 1.1.6H21a2 2 0 0 1 0 4h-.09c-.39.04-.79.24-1.1.6-.2.22-.42.57-.6 1Z"></path>
+            </svg>
+          </button>
+          <button class="help-button" type="button">Trợ giúp</button>
         </div>
-      </header>
+      </div>
+    </header>
 
-      <section class="workspace" aria-label="Meeting processing workspace">
-        <section class="recorder-pane">
-          <div class="recorder-head">
-            <div>
-              <p class="eyebrow">Recorder</p>
-              <h2>Ghi âm cuộc họp</h2>
+    <main class="page-shell">
+      <section class="dashboard-grid" aria-label="Không gian xử lý biên bản cuộc họp">
+        <div class="left-column">
+          <section class="app-card recorder-card" aria-labelledby="recorderTitle">
+            <div class="card-title-row">
+              <h2 id="recorderTitle">Ghi âm cuộc họp</h2>
+              <div class="status-pill" id="recordState">
+                <span></span>
+                Sẵn sàng
+              </div>
             </div>
-            <div class="timer" id="timer">00:00</div>
-          </div>
 
-          <div class="wave-stage">
-            <canvas id="waveform" width="1200" height="360" aria-label="Audio waveform"></canvas>
-            <div class="record-state" id="recordState">Ready</div>
-          </div>
+            <div class="wave-panel" aria-label="Bộ ghi âm">
+              <div class="timer" id="timer">00:00</div>
+              <canvas id="waveform" width="1200" height="360" aria-label="Audio waveform"></canvas>
+            </div>
 
-          <div class="controls" aria-label="Recording controls">
-            <button class="icon-button primary" id="recordBtn" type="button" title="Record">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"></circle></svg>
-              <span>Record</span>
-            </button>
-            <button class="icon-button" id="stopBtn" type="button" title="Stop" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1"></rect></svg>
-              <span>Stop</span>
-            </button>
-            <button class="icon-button" id="processBtn" type="button" title="Process" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
-              <span>Process</span>
-            </button>
-            <label class="file-button" title="Import audio">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0-12 4 4m-4-4-4 4M5 17v3h14v-3"></path></svg>
-              <span>Import</span>
-              <input id="fileInput" type="file" accept="audio/*,video/*" />
-            </label>
-          </div>
+            <div class="controls" aria-label="Điều khiển ghi âm">
+              <button class="action-button primary" id="recordBtn" type="button" title="Bắt đầu ghi âm">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <path d="M12 19v3"></path>
+                </svg>
+                <span>Bắt đầu ghi âm</span>
+              </button>
+              <button class="action-button neutral" id="stopBtn" type="button" title="Dừng" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="7" width="10" height="10" rx="1.5"></rect>
+                </svg>
+                <span>Dừng</span>
+              </button>
+              <button class="action-button secondary" id="processBtn" type="button" title="Xử lý" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="8" y="8" width="8" height="8" rx="1.5"></rect>
+                  <path d="M3 10h3M3 14h3M18 10h3M18 14h3M10 3v3M14 3v3M10 18v3M14 18v3"></path>
+                </svg>
+                <span>Xử lý</span>
+              </button>
+              <label class="action-button outline" title="Tải file lên">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 16V4"></path>
+                  <path d="m7 9 5-5 5 5"></path>
+                  <path d="M20 16.5V20H4v-3.5"></path>
+                </svg>
+                <span>Tải file lên</span>
+                <input id="fileInput" type="file" accept="audio/*,video/*" />
+              </label>
+            </div>
 
-          <audio id="playback" controls hidden></audio>
+            <audio id="playback" controls hidden></audio>
+          </section>
 
-          <div class="options" aria-label="Processing options">
-            <label>
-              <span>Language</span>
-              <select id="languageSelect">
-                <option value="vi" selected>Vietnamese</option>
-                <option value="en">English</option>
-              </select>
-            </label>
-            <label>
-              <span>Translate</span>
-              <select id="translateSelect">
-                <option value="vi-en" selected>VI to EN</option>
-                <option value="">Off</option>
-                <option value="en-vi">EN to VI</option>
-              </select>
-            </label>
-            <label class="toggle">
-              <input id="diarizationToggle" type="checkbox" checked />
-              <span>Diarization</span>
-            </label>
-            <label class="toggle">
-              <input id="summaryToggle" type="checkbox" checked />
-              <span>Summary</span>
-            </label>
-          </div>
+          <section class="app-card settings-card" aria-labelledby="settingsTitle">
+            <h2 id="settingsTitle">Cài đặt phân tích</h2>
 
-          <div class="pipeline" id="pipeline">
-            <span data-step="record">Record</span>
-            <span data-step="upload">Upload</span>
-            <span data-step="stt">STT</span>
-            <span data-step="diarize">Speakers</span>
-            <span data-step="summary">Summary</span>
-          </div>
-        </section>
+            <div class="settings-grid" aria-label="Tuỳ chọn xử lý">
+              <label class="field">
+                <span>Ngôn ngữ đầu vào</span>
+                <select id="languageSelect">
+                  <option value="vi" selected>Tiếng Việt</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
 
-        <section class="results-pane" aria-label="Meeting outputs">
-          <div class="result-section summary-section">
-            <div class="section-head">
-              <p class="eyebrow">Minutes</p>
-              <button class="ghost-button" id="copyBtn" type="button" title="Copy result" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h10v12H8zM6 16H4V4h12v2"></path></svg>
-                <span>Copy</span>
+              <label class="field">
+                <span>Dịch sang</span>
+                <select id="translateSelect">
+                  <option value="vi-en" selected>VI → EN</option>
+                  <option value="">Không dịch</option>
+                  <option value="en-vi">EN → VI</option>
+                </select>
+              </label>
+
+              <div class="field-row">
+                <label class="field">
+                  <span>Số người nói</span>
+                  <select id="speakerCountSelect">
+                    <option value="" selected>Tự động</option>
+                    <option value="1">1 người nói</option>
+                    <option value="2">2 người nói</option>
+                    <option value="3">3 người nói</option>
+                    <option value="4">4 người nói</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  <span>Chất lượng STT</span>
+                  <select id="sttQualitySelect">
+                    <option value="balanced" selected>Cân bằng</option>
+                    <option value="fast">Nhanh</option>
+                    <option value="accurate">Chính xác</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="toggle-list" aria-label="Tuỳ chọn AI">
+                <label class="toggle">
+                  <input id="diarizationToggle" type="checkbox" checked />
+                  <span>Tách người nói (Diarization)</span>
+                </label>
+                <label class="toggle">
+                  <input id="summaryToggle" type="checkbox" checked />
+                  <span>Tóm tắt nội dung</span>
+                </label>
+                <label class="toggle">
+                  <input id="llmToggle" type="checkbox" />
+                  <span>Sử dụng LLM cục bộ</span>
+                </label>
+              </div>
+
+              <label class="field context-field">
+                <span>Ngữ cảnh cuộc họp</span>
+                <textarea
+                  id="meetingContextInput"
+                  rows="3"
+                  placeholder="Ví dụ: Cuộc họp sprint, họp dự án AI, họp khách hàng..."
+                >Dự án AI ghi biên bản cuộc họp: xử lý ghi âm, nhận diện người nói, STT, tóm tắt, dịch, LLM, FastAPI, giao diện web.</textarea>
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <section class="app-card minutes-card" aria-labelledby="minutesTitle">
+          <div class="minutes-header">
+            <h2 id="minutesTitle">Biên bản cuộc họp</h2>
+            <div class="minutes-actions" aria-label="Thao tác với biên bản">
+              <button class="toolbar-button icon-only-button" id="copyBtn" type="button" title="Sao chép" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 8h10v12H8z"></path>
+                  <path d="M6 16H4V4h12v2"></path>
+                </svg>
+                <span class="sr-only">Sao chép</span>
+              </button>
+              <button class="toolbar-button pdf-button" id="pdfBtn" type="button" title="Xuất PDF" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path>
+                  <path d="M14 2v6h6"></path>
+                  <path d="M9 15h1.5a1.5 1.5 0 0 0 0-3H9v6"></path>
+                  <path d="M14 18v-6h1.2a2.8 2.8 0 0 1 0 6H14Z"></path>
+                </svg>
+                <span>Xuất PDF</span>
+              </button>
+              <button class="toolbar-button icon-only-button" id="downloadBtn" type="button" title="Tải xuống" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v12"></path>
+                  <path d="m7 10 5 5 5-5"></path>
+                  <path d="M5 21h14"></path>
+                </svg>
+                <span class="sr-only">Tải xuống</span>
               </button>
             </div>
-            <h2>Tóm tắt nội dung</h2>
-            <div class="warning-output" id="warningOutput" hidden></div>
-            <div class="summary-output" id="summaryOutput">No summary yet.</div>
           </div>
 
-          <div class="result-grid">
-            <section class="result-section">
-              <p class="eyebrow">Transcript</p>
-              <div class="transcript" id="transcriptOutput">No transcript yet.</div>
-            </section>
-            <section class="result-section">
-              <p class="eyebrow">Speakers</p>
-              <div class="speaker-list" id="speakerOutput">No speaker segments yet.</div>
-            </section>
-          </div>
+          <div class="warning-output" id="warningOutput" hidden></div>
 
-          <section class="result-section">
-            <p class="eyebrow">Translation</p>
-            <div class="translation-output" id="translationOutput">No translation yet.</div>
-          </section>
+          <div class="minutes-layout">
+            <div class="transcript-column">
+              <section class="output-section transcript-section" aria-labelledby="transcriptTitle">
+                <div class="section-label">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 5h16v10H8l-4 4V5Z"></path>
+                  </svg>
+                  <span id="transcriptTitle">TRANSCRIPT</span>
+                </div>
+                <div class="transcript" id="transcriptOutput">
+                  <div class="empty-state large">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                      <path d="M12 19v3"></path>
+                    </svg>
+                    <p>Chưa có transcript. Hãy ghi âm hoặc tải file để bắt đầu.</p>
+                  </div>
+                </div>
+              </section>
+
+              <section class="output-section speakers-section" aria-labelledby="speakersTitle">
+                <div class="section-label">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                  </svg>
+                  <span id="speakersTitle">NGƯỜI NÓI</span>
+                </div>
+                <div class="speaker-labels" id="speakerLabelControls" hidden></div>
+                <div class="speaker-list" id="speakerOutput">
+                  <div class="speaker-chip-list">
+                    <span>Speaker 1</span>
+                    <span>Speaker 2</span>
+                    <span>Speaker 3</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside class="insight-column">
+              <section class="output-section" aria-labelledby="summaryTitle">
+                <div class="section-label">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path>
+                    <path d="M14 2v6h6"></path>
+                    <path d="M8 13h8"></path>
+                    <path d="M8 17h5"></path>
+                  </svg>
+                  <span id="summaryTitle">TÓM TẮT NỘI DUNG</span>
+                </div>
+                <div class="summary-output" id="summaryOutput">
+                  <div class="empty-state compact">
+                    Chưa có bản tóm tắt. Hãy ghi âm hoặc tải file để xử lý.
+                  </div>
+                </div>
+              </section>
+
+              <section class="output-section" aria-labelledby="translationTitle">
+                <div class="section-label">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 8 6 6"></path>
+                    <path d="m4 14 6-6 2-3"></path>
+                    <path d="M2 5h12"></path>
+                    <path d="M7 2h1"></path>
+                    <path d="M22 22l-5-10-5 10"></path>
+                    <path d="M14 18h6"></path>
+                  </svg>
+                  <span id="translationTitle">BẢN DỊCH</span>
+                </div>
+                <div class="translation-output" id="translationOutput">
+                  <div class="empty-state compact">Chưa có bản dịch.</div>
+                </div>
+              </section>
+            </aside>
+          </div>
         </section>
+      </section>
+
+      <section class="app-card pipeline-card" aria-labelledby="pipelineTitle">
+        <div class="section-title-row">
+          <h2 id="pipelineTitle">TRẠNG THÁI LUỒNG XỬ LÝ</h2>
+        </div>
+        <div class="pipeline" id="pipeline" aria-label="Các bước xử lý">
+          <div class="pipeline-step" data-step="record">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            </svg>
+            <span>Ghi âm</span>
+          </div>
+          <div class="pipeline-step" data-step="upload">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 16V4"></path>
+              <path d="m7 9 5-5 5 5"></path>
+              <path d="M20 16.5V20H4v-3.5"></path>
+            </svg>
+            <span>Upload</span>
+          </div>
+          <div class="pipeline-step" data-step="stt">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16"></path>
+              <path d="M4 12h10"></path>
+              <path d="M4 18h16"></path>
+            </svg>
+            <span>Speech-to-Text</span>
+          </div>
+          <div class="pipeline-step" data-step="diarize">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+            </svg>
+            <span>Tách người nói</span>
+          </div>
+          <div class="pipeline-step" data-step="summary">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3 13.8 8.2 19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"></path>
+              <path d="M19 15v4"></path>
+              <path d="M21 17h-4"></path>
+            </svg>
+            <span>Tóm tắt AI</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="app-card history-card" aria-labelledby="historyTitle">
+        <h2 id="historyTitle">Lịch sử xử lý gần đây</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tên file</th>
+                <th>Trạng thái</th>
+                <th>Ngôn ngữ</th>
+                <th>Thời lượng</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <span class="file-cell">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path>
+                      <path d="M14 2v6h6"></path>
+                    </svg>
+                    Meeting_01.wav
+                  </span>
+                </td>
+                <td><span class="table-status done">Đã xử lý</span></td>
+                <td>Vietnamese</td>
+                <td>12 phút</td>
+                <td>
+                  <button class="row-action" type="button" aria-label="Xem chi tiết Meeting_01.wav">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <span class="file-cell">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path>
+                      <path d="M14 2v6h6"></path>
+                    </svg>
+                    Sprint_Planning.mp3
+                  </span>
+                </td>
+                <td><span class="table-status processing">Đang xử lý</span></td>
+                <td>Auto</td>
+                <td>25 phút</td>
+                <td>
+                  <button class="row-action" type="button" aria-label="Mở menu Sprint_Planning.mp3">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="12" cy="12" r="1"></circle>
+                      <circle cx="19" cy="12" r="1"></circle>
+                      <circle cx="5" cy="12" r="1"></circle>
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
 
-    <script src="/static/app.js" defer></script>
+    <footer class="app-footer">
+      <div>© 2024 AI Ghi Biên Bản Cuộc Họp. Tất cả quyền được bảo lưu.</div>
+      <nav aria-label="Liên kết chân trang">
+        <a href="#">Điều khoản</a>
+        <a href="#">Bảo mật</a>
+        <a href="#">Liên hệ</a>
+      </nav>
+    </footer>
+
+    <script src="/static/app.js?v=20260505-ui-refactor" defer></script>
   </body>
 </html>

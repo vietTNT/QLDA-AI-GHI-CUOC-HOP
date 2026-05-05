@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.config import settings
-from app.schemas import ActionItem, LLMRefinement
+from app.schemas import ActionItem, LLMRefinement, LLMTranscriptCorrection, TranscriptSegment, TranscriptionResponse
 
 
 DEFAULT_SAMPLE_TRANSCRIPT = (
@@ -42,11 +42,13 @@ class OllamaLLMService:
         merged_transcript: str,
         existing_summary: str | None = None,
         translated_transcript: str | None = None,
+        meeting_context: str | None = None,
     ) -> LLMRefinement:
         prompt = build_meeting_prompt(
             merged_transcript=merged_transcript,
             existing_summary=existing_summary,
             translated_transcript=translated_transcript,
+            meeting_context=meeting_context,
         )
         try:
             raw_text = self._generate(prompt)
@@ -54,21 +56,48 @@ class OllamaLLMService:
         except Exception as exc:
             return LLMRefinement(raw_text=None, parsed_json=False, error=str(exc))
 
+    def correct_transcript(
+        self,
+        transcript: TranscriptionResponse,
+        meeting_context: str | None = None,
+    ) -> LLMTranscriptCorrection:
+        if not transcript.segments:
+            return LLMTranscriptCorrection(
+                corrected_transcript=transcript,
+                raw_text=None,
+                parsed_json=True,
+            )
+
+        prompt = build_transcript_correction_prompt(transcript, meeting_context=meeting_context)
+        try:
+            raw_text = self._generate(prompt, response_format="json", temperature=0.0)
+            return parse_transcript_correction(raw_text, transcript)
+        except Exception as exc:
+            return LLMTranscriptCorrection(raw_text=None, parsed_json=False, error=str(exc))
+
     def smoke_test(self, transcript: str | None = None) -> LLMRefinement:
         return self.refine_meeting(transcript or DEFAULT_SAMPLE_TRANSCRIPT)
 
-    def _generate(self, prompt: str) -> str:
+    def _generate(
+        self,
+        prompt: str,
+        response_format: str | None = "json",
+        temperature: float = 0.1,
+    ) -> str:
         url = f"{self.config.base_url.rstrip('/')}/api/generate"
         payload = {
             "model": self.config.model,
             "prompt": prompt,
             "stream": False,
-            "format": "json",
+            "think": False,
             "options": {
-                "temperature": 0.1,
+                "temperature": temperature,
                 "num_ctx": 4096,
+                "num_predict": 1024,
             },
         }
+        if response_format:
+            payload["format"] = response_format
         data = json.dumps(payload).encode("utf-8")
         last_error: Exception | None = None
 
@@ -84,7 +113,11 @@ class OllamaLLMService:
                     body = json.loads(response.read().decode("utf-8"))
                 text = body.get("response")
                 if not isinstance(text, str) or not text.strip():
-                    raise OllamaError(f"Ollama returned an empty response for model {self.config.model}.")
+                    thinking = body.get("thinking")
+                    detail = " It only returned thinking tokens." if isinstance(thinking, str) and thinking.strip() else ""
+                    raise OllamaError(
+                        f"Ollama returned an empty response for model {self.config.model}.{detail}"
+                    )
                 return text.strip()
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", errors="replace")
@@ -112,17 +145,17 @@ def build_meeting_prompt(
     merged_transcript: str,
     existing_summary: str | None = None,
     translated_transcript: str | None = None,
+    meeting_context: str | None = None,
 ) -> str:
     context_blocks = [
-        "You are an assistant that writes professional Vietnamese meeting minutes.",
-        "Use only the provided transcript. Do not invent facts.",
-        "Ignore garbled speech-recognition fragments that do not change the meeting meaning.",
-        "If the transcript is only a microphone test such as 'a lô' or 'một hai', say there is not enough meeting content.",
-        "If assignee, deadline, risks, blockers, or decisions are missing, use null or an empty list.",
-        "Return strict JSON only. No markdown. No explanation outside JSON.",
-        "All string values in the JSON must be written in Vietnamese.",
-        "Do not translate the final JSON into English.",
-        "The JSON shape must be exactly:",
+        "Bạn là một Thư ký chuyên nghiệp, có nhiệm vụ viết biên bản cuộc họp bằng tiếng Việt.",
+        "Chỉ sử dụng thông tin từ Transcript được cung cấp. TUYỆT ĐỐI KHÔNG tự bịa đặt thêm sự kiện.",
+        "Bỏ qua các từ ngữ nhiễu do nhận diện giọng nói sai nếu nó không làm thay đổi ý nghĩa cuộc họp.",
+        "Nếu Transcript chỉ là test mic như 'a lô', 'một hai', hãy điền chuỗi 'Không đủ nội dung họp' vào các trường.",
+        "Nếu không có thông tin về người phụ trách, deadline, rủi ro hoặc quyết định, hãy dùng null hoặc mảng rỗng [].",
+        "Chỉ trả về duy nhất một đối tượng JSON. Không dùng markdown, không giải thích gì thêm.",
+        "Toàn bộ giá trị chuỗi (string) trong JSON bắt buộc phải viết bằng tiếng Việt.",
+        "Định dạng JSON bắt buộc phải chính xác như sau:",
         json.dumps(
             {
                 "summary": "...",
@@ -133,15 +166,98 @@ def build_meeting_prompt(
             },
             ensure_ascii=False,
         ),
-        "Write summary, action item task names, decisions, risks, and meeting_minutes in Vietnamese, concise, factual, and professional.",
-        "Transcript:",
-        merged_transcript.strip() or "(empty)",
+        "Transcript cuộc họp:",
+        merged_transcript.strip() or "(trống)",
     ]
+    if meeting_context:
+        context_blocks.extend(["Ngữ cảnh bổ sung:", meeting_context.strip()])
     if translated_transcript:
         context_blocks.extend(["Translated transcript if helpful:", translated_transcript.strip()])
     if existing_summary:
         context_blocks.extend(["Existing extractive summary if helpful:", existing_summary.strip()])
     return "\n\n".join(context_blocks)
+
+
+def build_transcript_correction_prompt(
+    transcript: TranscriptionResponse,
+    meeting_context: str | None = None,
+) -> str:
+    segments = [
+        {
+            "id": segment.id,
+            "start": segment.start,
+            "end": segment.end,
+            "speaker": segment.speaker,
+            "text": segment.text,
+        }
+        for segment in transcript.segments
+    ]
+    return "\n\n".join(
+        [
+            "Bạn là bộ sửa lỗi nhận dạng giọng nói tiếng Việt cho ứng dụng ghi biên bản cuộc họp.",
+            "Nhiệm vụ: sửa lỗi chính tả, dấu câu, từ bị nghe nhầm, và cụm từ vô nghĩa do ASR gây ra.",
+            "Ngữ cảnh thường gặp: họp dự án phần mềm, phân công nhiệm vụ, tiến độ, kiểm thử, báo cáo lỗi, deadline, quyết định, rủi ro, khách hàng, giao diện, backend, API, cơ sở dữ liệu.",
+            f"Ngữ cảnh dự án/người dùng cung cấp: {meeting_context.strip() if meeting_context else settings.meeting_context}",
+            "Quy tắc rất quan trọng:",
+            "- Chỉ sửa khi có cơ sở từ ngữ cảnh và câu tiếng Việt hợp lý.",
+            "- Không thêm sự kiện, tên người, con số, deadline, quyết định, hay nội dung không có trong transcript.",
+            "- Nếu một đoạn quá nhiễu hoặc không thể suy ra chắc chắn, giữ nguyên text của đoạn đó.",
+            "- Giữ nguyên id, thứ tự, timestamp, và speaker. Chỉ thay trường text.",
+            "- Viết tiếng Việt có dấu, tự nhiên, phù hợp văn bản biên bản họp.",
+            "Trả về JSON nghiêm ngặt, không markdown, đúng schema:",
+            json.dumps({"segments": [{"id": 0, "text": "..."}]}, ensure_ascii=False),
+            "Transcript ASR:",
+            json.dumps({"segments": segments}, ensure_ascii=False),
+        ]
+    )
+
+
+def parse_transcript_correction(
+    raw_text: str,
+    original: TranscriptionResponse,
+) -> LLMTranscriptCorrection:
+    raw_text = raw_text.strip()
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        data = extract_json_object(raw_text)
+        if data is None:
+            return LLMTranscriptCorrection(raw_text=raw_text, parsed_json=False)
+
+    if not isinstance(data, dict):
+        return LLMTranscriptCorrection(raw_text=raw_text, parsed_json=False)
+
+    corrections = data.get("segments")
+    if not isinstance(corrections, list):
+        return LLMTranscriptCorrection(raw_text=raw_text, parsed_json=False)
+
+    text_by_id: dict[int, str] = {}
+    for item in corrections:
+        if not isinstance(item, dict):
+            continue
+        try:
+            segment_id = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        text = str(item.get("text") or "").strip()
+        if text:
+            text_by_id[segment_id] = text
+
+    corrected_segments = [
+        segment.model_copy(update={"text": text_by_id.get(segment.id, segment.text)})
+        for segment in original.segments
+    ]
+    corrected = original.model_copy(
+        update={
+            "segments": corrected_segments,
+            "text": " ".join(segment.text for segment in corrected_segments),
+        }
+    )
+    return LLMTranscriptCorrection(
+        corrected_transcript=corrected,
+        raw_text=raw_text,
+        parsed_json=True,
+    )
 
 
 def parse_llm_refinement(raw_text: str) -> LLMRefinement:

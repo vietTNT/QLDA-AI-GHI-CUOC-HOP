@@ -10,9 +10,15 @@ LOW_INFORMATION_SUMMARY = (
 
 MIC_CHECK_REPLACEMENTS = (
     (re.compile(r"\b(?:alo|a\s*lô|à\s*lô|a\s*lộ|a\s*lôn|a\s*lâu)\b", re.IGNORECASE), "a lô"),
-    (re.compile(r"\b(?:mọt|một|mau|mọto)\s+(?:áo\s*bò|hà\s*bò|hả\s*bòa|hề\s*bỏ|gà\s*bò)\b", re.IGNORECASE), "một hai"),
+    (
+        re.compile(
+            r"\b(?:mot|mọt|một|mau|mọto)\s+(?:hai|áo\s*bò|hà\s*bò|hả\s*bòa|hề\s*bỏ|gà\s*bò)\b",
+            re.IGNORECASE,
+        ),
+        "một hai",
+    ),
     (re.compile(r"\bmột\s+hai\s+(?:boi|oi)\b", re.IGNORECASE), "một hai"),
-    (re.compile(r"\bmột\s+(?:hai\s+bon|hả\s+hỏa|hề\s+bò\s+bõ)\b", re.IGNORECASE), "một hai"),
+    (re.compile(r"\bmột\s+(?:hai\s+bon|hả\s+hỏa|hề\s*bò\s*bõ)\b", re.IGNORECASE), "một hai"),
     (re.compile(r"\bunk\b", re.IGNORECASE), ""),
     (re.compile(r"\b(?:loại|bỏ|bòa)\b", re.IGNORECASE), ""),
 )

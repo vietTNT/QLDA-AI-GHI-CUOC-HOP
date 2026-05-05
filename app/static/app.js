@@ -3,12 +3,14 @@ const state = {
   audioChunks: [],
   audioBlob: null,
   audioUrl: null,
+  currentJobId: null,
   audioContext: null,
   analyser: null,
   animationFrame: null,
   startedAt: null,
   timerInterval: null,
   latestResult: null,
+  speakerLabels: {},
 };
 
 const els = {
@@ -25,14 +27,21 @@ const els = {
   pipeline: document.querySelector("#pipeline"),
   languageSelect: document.querySelector("#languageSelect"),
   translateSelect: document.querySelector("#translateSelect"),
+  speakerCountSelect: document.querySelector("#speakerCountSelect"),
+  sttQualitySelect: document.querySelector("#sttQualitySelect"),
+  meetingContextInput: document.querySelector("#meetingContextInput"),
   diarizationToggle: document.querySelector("#diarizationToggle"),
   summaryToggle: document.querySelector("#summaryToggle"),
+  llmToggle: document.querySelector("#llmToggle"),
   summaryOutput: document.querySelector("#summaryOutput"),
   warningOutput: document.querySelector("#warningOutput"),
   transcriptOutput: document.querySelector("#transcriptOutput"),
+  speakerLabelControls: document.querySelector("#speakerLabelControls"),
   speakerOutput: document.querySelector("#speakerOutput"),
   translationOutput: document.querySelector("#translationOutput"),
   copyBtn: document.querySelector("#copyBtn"),
+  pdfBtn: document.querySelector("#pdfBtn"),
+  downloadBtn: document.querySelector("#downloadBtn"),
 };
 
 const ctx = els.waveform.getContext("2d");
@@ -42,7 +51,16 @@ function setStatus(text, kind = "pending") {
 }
 
 function setRecordState(text) {
-  els.recordState.textContent = text;
+  const labels = {
+    Ready: "Sẵn sàng",
+    Recorded: "Đã ghi",
+    Recording: "Đang ghi",
+    Processing: "Đang xử lý",
+    Complete: "Hoàn tất",
+    Copied: "Đã sao chép",
+    Downloaded: "Đã tải xuống",
+  };
+  els.recordState.innerHTML = `<span></span>${escapeHtml(labels[text] || text)}`;
 }
 
 function formatTime(seconds) {
@@ -64,7 +82,7 @@ function stopTimer() {
 }
 
 function setPipeline(activeStep, doneSteps = []) {
-  [...els.pipeline.querySelectorAll("span")].forEach((item) => {
+  [...els.pipeline.querySelectorAll("[data-step]")].forEach((item) => {
     const step = item.dataset.step;
     item.classList.toggle("active", step === activeStep);
     item.classList.toggle("done", doneSteps.includes(step));
@@ -74,15 +92,25 @@ function setPipeline(activeStep, doneSteps = []) {
 function drawIdleWave() {
   const { width, height } = els.waveform;
   ctx.clearRect(0, 0, width, height);
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = "#0b6b5b";
-  ctx.beginPath();
-  for (let x = 0; x < width; x += 12) {
-    const y = height / 2 + Math.sin(x / 42 + Date.now() / 900) * 20;
-    if (x === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+
+  const bars = 18;
+  const barWidth = 7;
+  const gap = 11;
+  const totalWidth = bars * barWidth + (bars - 1) * gap;
+  const startX = (width - totalWidth) / 2;
+  const centerY = height * 0.68;
+
+  ctx.fillStyle = "rgba(15, 118, 110, 0.52)";
+  for (let index = 0; index < bars; index += 1) {
+    const phase = Date.now() / 580 + index * 0.72;
+    const amplitude = 18 + Math.abs(Math.sin(phase)) * 42;
+    const x = startX + index * (barWidth + gap);
+    const y = centerY - amplitude / 2;
+    ctx.beginPath();
+    ctx.roundRect(x, y, barWidth, amplitude, 5);
+    ctx.fill();
   }
-  ctx.stroke();
+
   state.animationFrame = requestAnimationFrame(drawIdleWave);
 }
 
@@ -92,17 +120,27 @@ function drawLiveWave() {
   state.analyser.getByteTimeDomainData(buffer);
   const { width, height } = els.waveform;
   ctx.clearRect(0, 0, width, height);
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = "#d65b3a";
-  ctx.beginPath();
-  const slice = width / buffer.length;
-  buffer.forEach((value, index) => {
-    const x = index * slice;
-    const y = (value / 255) * height;
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
+
+  const bars = 34;
+  const barWidth = 6;
+  const gap = 7;
+  const totalWidth = bars * barWidth + (bars - 1) * gap;
+  const startX = (width - totalWidth) / 2;
+  const centerY = height * 0.68;
+  const step = Math.floor(buffer.length / bars);
+
+  ctx.fillStyle = "rgba(5, 150, 105, 0.72)";
+  for (let index = 0; index < bars; index += 1) {
+    const value = buffer[index * step] || 128;
+    const normalized = Math.abs(value - 128) / 128;
+    const amplitude = 18 + normalized * 118;
+    const x = startX + index * (barWidth + gap);
+    const y = centerY - amplitude / 2;
+    ctx.beginPath();
+    ctx.roundRect(x, y, barWidth, amplitude, 5);
+    ctx.fill();
+  }
+
   state.animationFrame = requestAnimationFrame(drawLiveWave);
 }
 
@@ -129,7 +167,14 @@ function getSupportedMimeType() {
 }
 
 async function startRecording() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      autoGainControl: true,
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+    },
+  });
   state.audioChunks = [];
   state.audioBlob = null;
   const mimeType = getSupportedMimeType();
@@ -212,14 +257,20 @@ async function processAudio() {
 
   const params = new URLSearchParams({
     language: els.languageSelect.value,
+    stt_quality: els.sttQualitySelect.value,
     include_diarization: els.diarizationToggle.checked ? "true" : "false",
     include_summary: els.summaryToggle.checked ? "true" : "false",
   });
   if (els.translateSelect.value) params.set("translate_to", els.translateSelect.value);
-  params.set("include_llm", "true");
+  if (els.diarizationToggle.checked && els.speakerCountSelect.value) {
+    params.set("num_speakers", els.speakerCountSelect.value);
+  }
+  if (els.meetingContextInput.value.trim()) {
+    params.set("meeting_context", els.meetingContextInput.value.trim());
+  }
+  params.set("include_llm", els.llmToggle.checked ? "true" : "false");
 
   try {
-    setPipeline("stt", ["record", "upload"]);
     const response = await fetch(`/api/process?${params.toString()}`, {
       method: "POST",
       body: formData,
@@ -228,11 +279,26 @@ async function processAudio() {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || `Request failed: ${response.status}`);
     }
-    setPipeline("summary", ["record", "upload", "stt", "diarize"]);
-    const result = await response.json();
-    state.latestResult = result;
-    renderResult(result);
+    const accepted = await response.json();
+    if (!accepted.job_id) {
+      throw new Error("Server did not return a job id.");
+    }
+
+    state.currentJobId = accepted.job_id;
+    setRecordState(`Processing ${accepted.job_id.slice(0, 8)}`);
+    setPipeline("stt", ["record", "upload"]);
+
+    const result = await pollJobStatus(accepted.job_id);
+    if (result.status === "error") {
+      throw new Error(`${result.step || "processing"}: ${result.error || "Job failed"}`);
+    }
+
+    state.latestResult = normalizeResultForUi(result);
+    state.speakerLabels = {};
+    renderResult(state.latestResult);
     els.copyBtn.disabled = false;
+    if (els.pdfBtn) els.pdfBtn.disabled = false;
+    if (els.downloadBtn) els.downloadBtn.disabled = false;
     setRecordState("Complete");
     setPipeline(null, ["record", "upload", "stt", "diarize", "summary"]);
   } catch (error) {
@@ -245,38 +311,112 @@ async function processAudio() {
   }
 }
 
+async function pollJobStatus(jobId) {
+  const startedAt = Date.now();
+  while (true) {
+    await sleep(2000);
+    const response = await fetch(`/api/status/${encodeURIComponent(jobId)}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `Status check failed: ${response.status}`);
+    }
+
+    const result = await response.json();
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    if (result.status !== "processing") return result;
+
+    setRecordState(result.message || `Processing ${formatTime(elapsed)}`);
+    if (elapsed > 5) setPipeline("diarize", ["record", "upload", "stt"]);
+    if (elapsed > 20) setPipeline("summary", ["record", "upload", "stt", "diarize"]);
+    if (result.step === "speech_to_text") setPipeline("stt", ["record", "upload", "diarize"]);
+    if (result.step === "llm_correction") setPipeline("summary", ["record", "upload", "diarize", "stt"]);
+    if (result.step === "summary" || result.step === "llm_refinement") {
+      setPipeline("summary", ["record", "upload", "diarize", "stt"]);
+    }
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function normalizeResultForUi(result) {
+  if (result.transcript || result.diarization?.segments) return result;
+
+  const transcriptSegments = (result.original_transcript || []).map((segment) => ({
+    id: segment.id,
+    start: Number(segment.start || 0),
+    end: Number(segment.end || 0),
+    speaker: segment.speaker || null,
+    text: segment.text || "",
+  }));
+  const diarizationSegments = (result.diarization || []).map((segment) => ({
+    start: Number(segment.start || 0),
+    end: Number(segment.end || 0),
+    speaker: segment.speaker || "",
+  }));
+  return {
+    ...result,
+    transcript: {
+      segments: transcriptSegments,
+      text: transcriptSegments.map((segment) => segment.text).join(" "),
+    },
+    diarization: {
+      segments: diarizationSegments,
+    },
+    meeting_minutes: result.corrected_transcript || result.merged_transcript || "",
+    warnings: result.job_id ? [`Job ${result.job_id}`] : [],
+  };
+}
+
 function renderResult(result) {
-  renderWarnings(result.warnings || []);
-  els.summaryOutput.textContent =
+  const warnings = [...(result.warnings || [])];
+  if (result.original_transcript?.text) {
+    warnings.push("Transcript ASR gốc có trong phản hồi API để đối chiếu khi cần.");
+  }
+  renderWarnings(warnings);
+  renderSummary(result);
+  els.translationOutput.innerHTML = renderTranslationAndActions(result);
+  renderSpeakerLabelControls(result);
+  renderTranscript(result.transcript?.segments || []);
+  renderSpeakers(result.diarization?.segments || []);
+}
+
+function renderSummary(result) {
+  const summary =
     result.meeting_minutes ||
     result.llm_summary ||
     result.translated_summary ||
-    result.summary ||
-    "No summary returned.";
-  els.translationOutput.innerHTML = renderTranslationAndActions(result);
-  renderTranscript(result.transcript?.segments || []);
-  renderSpeakers(result.diarization?.segments || []);
+    result.summary;
+
+  if (!summary) {
+    els.summaryOutput.innerHTML = compactEmptyState("Chưa có bản tóm tắt. Hãy ghi âm hoặc tải file để xử lý.");
+    return;
+  }
+
+  els.summaryOutput.textContent = labelText(summary);
 }
 
 function renderTranslationAndActions(result) {
   const parts = [];
   const translation = result.translated_transcript || result.translated_text;
   if (translation) {
-    parts.push(`<div>${escapeHtml(translation)}</div>`);
+    parts.push(`<div>${escapeHtml(labelText(translation))}</div>`);
   }
   if (result.action_items?.length) {
     const rows = result.action_items
       .map((item) => {
-        const meta = [item.assignee, item.deadline].filter(Boolean).join(" · ");
-        return `<div class="speaker-row"><span>${escapeHtml(item.task)}</span><span class="segment-time">${escapeHtml(meta || "no owner/date")}</span></div>`;
+        const assignee = item.assignee ? labelText(item.assignee) : null;
+        const meta = [assignee, item.deadline].filter(Boolean).join(" · ");
+        return `<div class="speaker-row"><span>${escapeHtml(labelText(item.task))}</span><span class="segment-time">${escapeHtml(meta || "chưa có người phụ trách/thời hạn")}</span></div>`;
       })
       .join("");
     parts.push(`<div class="action-list">${rows}</div>`);
   }
   if (result.decisions?.length) {
-    parts.push(`<div>${result.decisions.map((item) => `Decision: ${escapeHtml(item)}`).join("<br>")}</div>`);
+    parts.push(`<div>${result.decisions.map((item) => `Quyết định: ${escapeHtml(labelText(item))}`).join("<br>")}</div>`);
   }
-  return parts.join("") || "No translation or action items yet.";
+  return parts.join("") || compactEmptyState("Chưa có bản dịch.");
 }
 
 function renderWarnings(warnings) {
@@ -291,7 +431,7 @@ function renderWarnings(warnings) {
 
 function renderTranscript(segments) {
   if (!segments.length) {
-    els.transcriptOutput.textContent = "No transcript returned.";
+    els.transcriptOutput.innerHTML = largeTranscriptEmptyState();
     return;
   }
   els.transcriptOutput.innerHTML = segments
@@ -300,7 +440,7 @@ function renderTranscript(segments) {
       <div class="segment">
         <div>
           <div class="segment-time">${segment.start.toFixed(1)}-${segment.end.toFixed(1)}s</div>
-          <div class="speaker-chip">${segment.speaker || "SPEAKER"}</div>
+          <div class="speaker-chip">${escapeHtml(displaySpeaker(segment.speaker))}</div>
         </div>
         <div>${escapeHtml(segment.text)}</div>
       </div>
@@ -311,19 +451,115 @@ function renderTranscript(segments) {
 
 function renderSpeakers(segments) {
   if (!segments.length) {
-    els.speakerOutput.textContent = "No speaker segments returned.";
+    els.speakerOutput.innerHTML = defaultSpeakerChips();
     return;
   }
   els.speakerOutput.innerHTML = segments
     .map(
       (segment) => `
       <div class="speaker-row">
-        <span class="speaker-chip">${escapeHtml(segment.speaker)}</span>
+        <span class="speaker-chip">${escapeHtml(displaySpeaker(segment.speaker))}</span>
         <span class="segment-time">${segment.start.toFixed(1)}-${segment.end.toFixed(1)}s</span>
       </div>
     `,
     )
     .join("");
+}
+
+function compactEmptyState(text) {
+  return `<div class="empty-state compact">${escapeHtml(text)}</div>`;
+}
+
+function largeTranscriptEmptyState() {
+  return `
+    <div class="empty-state large">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+        <path d="M12 19v3"></path>
+      </svg>
+      <p>Chưa có transcript. Hãy ghi âm hoặc tải file để bắt đầu.</p>
+    </div>
+  `;
+}
+
+function defaultSpeakerChips() {
+  return `
+    <div class="speaker-chip-list">
+      <span>Speaker 1</span>
+      <span>Speaker 2</span>
+      <span>Speaker 3</span>
+    </div>
+  `;
+}
+
+function renderSpeakerLabelControls(result) {
+  const speakers = collectSpeakers(result);
+  if (!speakers.length) {
+    els.speakerLabelControls.hidden = true;
+    els.speakerLabelControls.innerHTML = "";
+    return;
+  }
+
+  els.speakerLabelControls.hidden = false;
+  els.speakerLabelControls.innerHTML = speakers
+    .map(
+      (speaker) => `
+      <label class="speaker-label-row">
+        <span class="speaker-chip">${escapeHtml(speaker)}</span>
+        <input
+          type="text"
+          data-speaker="${escapeHtml(speaker)}"
+          value="${escapeHtml(state.speakerLabels[speaker] || "")}"
+          placeholder="Nhập tên người nói"
+          aria-label="Gán tên cho ${escapeHtml(speaker)}"
+        />
+      </label>
+    `,
+    )
+    .join("");
+
+  [...els.speakerLabelControls.querySelectorAll("input")].forEach((input) => {
+    input.addEventListener("input", (event) => {
+      const speaker = event.target.dataset.speaker;
+      const label = event.target.value.trim();
+      if (label) state.speakerLabels[speaker] = label;
+      else delete state.speakerLabels[speaker];
+      renderSummary(state.latestResult || {});
+      els.translationOutput.innerHTML = renderTranslationAndActions(state.latestResult || {});
+      renderTranscript(state.latestResult?.transcript?.segments || []);
+      renderSpeakers(state.latestResult?.diarization?.segments || []);
+    });
+  });
+}
+
+function collectSpeakers(result) {
+  const speakers = new Set();
+  result.diarization?.segments?.forEach((segment) => {
+    if (segment.speaker) speakers.add(segment.speaker);
+  });
+  result.transcript?.segments?.forEach((segment) => {
+    if (segment.speaker) speakers.add(segment.speaker);
+  });
+  return [...speakers].sort();
+}
+
+function displaySpeaker(speaker) {
+  if (!speaker) return "SPEAKER";
+  return state.speakerLabels[speaker] || speaker;
+}
+
+function labelText(text) {
+  let labeledText = String(text || "");
+  Object.entries(state.speakerLabels).forEach(([speaker, label]) => {
+    if (!label) return;
+    labeledText = labeledText.replace(new RegExp(escapeRegExp(speaker), "g"), label);
+  });
+  return labeledText;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function escapeHtml(value) {
@@ -335,25 +571,50 @@ function escapeHtml(value) {
 
 async function copyResult() {
   if (!state.latestResult) return;
+  await navigator.clipboard.writeText(composeResultText());
+  setRecordState("Copied");
+}
+
+function composeResultText() {
   const transcript = state.latestResult.transcript?.segments
-    ?.map((segment) => `${segment.speaker || "SPEAKER"} [${segment.start}-${segment.end}s]: ${segment.text}`)
+    ?.map((segment) => `${displaySpeaker(segment.speaker)} [${segment.start}-${segment.end}s]: ${segment.text}`)
     .join("\n");
-  const text = [
-    "SUMMARY",
+  const summary =
     state.latestResult.meeting_minutes ||
-      state.latestResult.llm_summary ||
-      state.latestResult.translated_summary ||
-      state.latestResult.summary ||
-      "",
+    state.latestResult.llm_summary ||
+    state.latestResult.translated_summary ||
+    state.latestResult.summary ||
+    "";
+  const text = [
+    "TÓM TẮT",
+    labelText(summary),
     "",
-    "TRANSLATION",
-    state.latestResult.translated_transcript || state.latestResult.translated_text || "",
+    "BẢN DỊCH",
+    labelText(state.latestResult.translated_transcript || state.latestResult.translated_text || ""),
     "",
     "TRANSCRIPT",
     transcript || "",
   ].join("\n");
-  await navigator.clipboard.writeText(text);
-  setRecordState("Copied");
+  return text;
+}
+
+function exportPdf() {
+  if (!state.latestResult) return;
+  window.print();
+}
+
+function downloadResult() {
+  if (!state.latestResult) return;
+  const blob = new Blob([composeResultText()], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `bien-ban-cuoc-hop-${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setRecordState("Downloaded");
 }
 
 els.recordBtn.addEventListener("click", () => {
@@ -366,6 +627,8 @@ els.fileInput.addEventListener("change", (event) => {
   if (file) useImportedFile(file);
 });
 els.copyBtn.addEventListener("click", copyResult);
+els.pdfBtn?.addEventListener("click", exportPdf);
+els.downloadBtn?.addEventListener("click", downloadResult);
 
 drawIdleWave();
 checkHealth();

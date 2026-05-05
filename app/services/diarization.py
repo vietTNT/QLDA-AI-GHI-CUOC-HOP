@@ -25,9 +25,13 @@ class DiarizationService:
 
                 warnings.filterwarnings(
                     "ignore",
-                    message=".*torchcodec is not installed correctly.*",
+                    message=r"[\s\S]*torchcodec is not installed correctly[\s\S]*",
                     category=UserWarning,
-                    module="pyannote.audio.core.io",
+                )
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*degrees of freedom is <= 0.*",
+                    category=UserWarning,
                 )
                 from pyannote.audio import Pipeline
 
@@ -38,12 +42,13 @@ class DiarizationService:
                 self._pipeline = pipeline
         return self._pipeline
 
-    def diarize(self, audio_path: Path) -> DiarizationResponse:
+    def diarize(self, audio_path: Path, num_speakers: int | None = None) -> DiarizationResponse:
         if get_audio_duration(audio_path) < settings.min_diarization_duration_seconds:
             return DiarizationResponse(segments=[])
 
         pipeline = self._load()
-        diarization_output = pipeline(read_waveform_for_pyannote(audio_path))
+        kwargs = {"num_speakers": num_speakers} if num_speakers else {}
+        diarization_output = pipeline(read_waveform_for_pyannote(audio_path), **kwargs)
         diarization = extract_annotation(diarization_output)
         segments = [
             DiarizationSegment(
@@ -74,12 +79,16 @@ def attach_speakers(
 ) -> list[TranscriptSegment]:
     output: list[TranscriptSegment] = []
     for segment in transcript_segments:
-        midpoint = (segment.start + segment.end) / 2
-        speaker = None
+        speaker_scores: dict[str, float] = {}
         for diarization_segment in diarization_segments:
-            if diarization_segment.start <= midpoint <= diarization_segment.end:
-                speaker = diarization_segment.speaker
-                break
+            overlap_start = max(segment.start, diarization_segment.start)
+            overlap_end = min(segment.end, diarization_segment.end)
+            overlap = max(0.0, overlap_end - overlap_start)
+            if overlap > 0:
+                speaker_scores[diarization_segment.speaker] = (
+                    speaker_scores.get(diarization_segment.speaker, 0.0) + overlap
+                )
+        speaker = max(speaker_scores, key=speaker_scores.get) if speaker_scores else None
         output.append(segment.model_copy(update={"speaker": speaker}))
     return output
 

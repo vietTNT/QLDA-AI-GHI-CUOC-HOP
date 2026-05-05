@@ -57,8 +57,13 @@ class SummarizationService:
                     local_files_only=True,
                 )
                 self._model.generation_config.max_length = None
+                self._model.generation_config.min_length = None
+                if self._model.generation_config.forced_bos_token_id is None and self._tokenizer.bos_token_id is not None:
+                    self._model.generation_config.forced_bos_token_id = self._tokenizer.bos_token_id
                 if hasattr(self._model.config, "max_length"):
                     self._model.config.max_length = None
+                if hasattr(self._model.config, "min_length"):
+                    self._model.config.min_length = None
                 self._model.to("cpu")
                 self._model.eval()
         return self._tokenizer, self._model

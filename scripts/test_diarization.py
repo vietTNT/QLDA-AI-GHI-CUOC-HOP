@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import warnings
 from pathlib import Path
 
 
@@ -61,6 +62,11 @@ def main() -> int:
 
     try:
         import torch
+        warnings.filterwarnings(
+            "ignore",
+            message=r"[\s\S]*torchcodec is not installed correctly[\s\S]*",
+            category=UserWarning,
+        )
         from pyannote.audio import Pipeline
     except ImportError as exc:
         print("pyannote.audio or torch is not installed in the active environment.")

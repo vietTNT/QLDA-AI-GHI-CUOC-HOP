@@ -83,6 +83,13 @@ class LLMRefinement(BaseModel):
     error: str | None = None
 
 
+class LLMTranscriptCorrection(BaseModel):
+    corrected_transcript: TranscriptionResponse | None = None
+    raw_text: str | None = None
+    parsed_json: bool = False
+    error: str | None = None
+
+
 class LLMTestRequest(BaseModel):
     transcript: str | None = None
 
@@ -95,8 +102,19 @@ class LLMHealthResponse(BaseModel):
     error: str | None = None
 
 
+class JobAcceptedResponse(BaseModel):
+    job_id: str
+    status: Literal["processing"]
+
+
+class JobProcessingResponse(BaseModel):
+    status: Literal["processing"]
+
+
 class ProcessResponse(BaseModel):
     transcript: TranscriptionResponse
+    original_transcript: TranscriptionResponse | None = None
+    transcript_correction: LLMTranscriptCorrection | None = None
     diarization: DiarizationResponse | None = None
     merged_transcript: str
     translated_transcript: str | None = None

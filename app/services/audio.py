@@ -17,17 +17,26 @@ def safe_upload_name(original_name: str) -> str:
 
 
 def find_ffmpeg() -> str:
+    candidates: list[str] = []
     configured = os.environ.get("FFMPEG_BINARY")
     if configured:
+        configured = normalize_windows_path(configured)
         try:
             if Path(configured).exists():
-                return configured
+                candidates.append(configured)
         except OSError:
-            return configured
+            candidates.append(configured)
 
     found = shutil.which("ffmpeg")
     if found:
-        return found
+        candidates.append(found)
+
+    try:
+        import imageio_ffmpeg
+
+        candidates.append(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        pass
 
     candidate_roots = [
         Path.home() / "AppData" / "Local" / "Microsoft" / "WinGet" / "Packages",
@@ -45,12 +54,35 @@ def find_ffmpeg() -> str:
         if not winget_root.exists():
             continue
         matches = sorted(winget_root.glob("Gyan.FFmpeg*/**/bin/ffmpeg.exe"))
-        if matches:
-            return str(matches[-1])
+        candidates.extend(str(match) for match in matches)
+
+    for candidate in dict.fromkeys(candidates):
+        if can_execute_ffmpeg(candidate):
+            return candidate
 
     raise RuntimeError(
         "ffmpeg was not found on PATH. Install it or add the Gyan.FFmpeg bin folder to PATH."
     )
+
+
+def normalize_windows_path(value: str) -> str:
+    if len(value) >= 3 and value[0] == "/" and value[2] == "/" and value[1].isalpha():
+        return f"{value[1].upper()}:\\{value[3:].replace('/', '\\')}"
+    return value
+
+
+def can_execute_ffmpeg(candidate: str) -> bool:
+    try:
+        completed = subprocess.run(
+            [candidate, "-version"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
 
 
 def save_upload_bytes(data: bytes, filename: str) -> Path:

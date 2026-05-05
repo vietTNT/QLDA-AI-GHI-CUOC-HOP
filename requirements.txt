@@ -7,7 +7,9 @@ sacremoses
 accelerate
 librosa
 pydub
+requests
 soundfile
+imageio-ffmpeg
 faster-whisper
 pyannote.audio
 huggingface_hub
