@@ -11,3 +11,5 @@ __pycache__/
 
 # Local model files are large and should be downloaded locally, not committed.
 models/
+backup-before-commit.patch
+backup-status.txt
