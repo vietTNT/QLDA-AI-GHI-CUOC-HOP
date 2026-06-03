@@ -1,5 +1,775 @@
 # QLDA-AI-GHI-CUOC-HOP
 
+[English](#english) | [Tiếng Việt](#tiếng-việt)
+
+## English
+
+AI Meeting Assistant helps teams record meetings, transcribe speech to text, identify speakers, translate between English and Vietnamese, summarize long transcripts, ask questions over meeting content with RAG, manage meetings, and track action items.
+
+### Table of Contents
+
+- [Overview](#overview)
+- [Business Scope](#business-scope)
+- [Main Features](#main-features)
+- [System Architecture](#system-architecture)
+- [Folder Structure](#folder-structure)
+- [Tech Stack](#tech-stack)
+- [Requirements](#requirements)
+- [Environment Configuration](#environment-configuration)
+- [Run With Docker](#run-with-docker)
+- [Run Services Manually](#run-services-manually)
+- [Database and Prisma](#database-and-prisma)
+- [AI Server](#ai-server)
+- [Audio Processing Flow](#audio-processing-flow)
+- [Realtime Recording](#realtime-recording)
+- [RAG Q&A With Chroma](#rag-qa-with-chroma)
+- [Frontend](#frontend)
+- [Backend API](#backend-api)
+- [Testing](#testing)
+- [Common Docker Commands](#common-docker-commands)
+- [Git Push Guide](#git-push-guide)
+- [Troubleshooting](#troubleshooting)
+- [Security and Performance Notes](#security-and-performance-notes)
+
+### Overview
+
+The project contains three main parts:
+
+1. `frontend`: a React/Vite user interface for dashboard, recording, audio upload, meeting list, meeting detail, and action items.
+2. `backend`: a Node.js/Express REST API with Prisma ORM, PostgreSQL, Swagger, file upload, PDF/DOCX/JSON export, and a WebSocket recording bridge.
+3. `app`: a FastAPI AI server for STT, speaker diarization, translation, summarization, LLM Q&A, and vector indexing.
+
+In the current Docker setup, Docker runs only `frontend` and `backend`. PostgreSQL and the AI server run directly on the host machine so local GPU and local models can be used more reliably.
+
+### Business Scope
+
+The system manages the full lifecycle of meeting content: recording or uploading audio, converting it into a transcript, identifying speakers, summarizing the discussion, extracting action items, searching previous content, asking questions, and exporting meeting minutes.
+
+The goal is to reduce manual note-taking work. Instead of asking participants to write meeting minutes during the call, the system receives audio, processes it with AI, stores structured content, and gives users tools to review, edit, confirm, manage, and reuse meeting information.
+
+Main workflow:
+
+```text
+Create/select a meeting
+  -> Record audio or upload an audio file
+  -> Choose transcript-only or speaker-label mode
+  -> AI converts audio into transcript
+  -> Save transcript, speakers, and file metadata to the database
+  -> User reviews and edits the content
+  -> Generate summary, keywords, sentiment, and action items
+  -> Ask questions over the meeting transcript with LLM + Chroma
+  -> Manage action items after the meeting
+  -> Export meeting minutes as PDF/DOCX/JSON
+```
+
+### Main Features
+
+- Meeting management: create, update, soft-delete, search, filter, and view meeting details.
+- Audio upload and STT: upload audio, stream transcript chunks, and save transcripts to PostgreSQL.
+- Speaker diarization: detect speaker timelines and map transcript segments to speaker labels.
+- Realtime recording: stream browser microphone chunks through WebSocket and show live transcript output.
+- Translation: translate Vietnamese to English and English to Vietnamese with local models.
+- Summary and Q&A: summarize transcripts and answer questions with LLM + Chroma retrieval.
+- Action items: manage tasks in `Todo`, `In progress`, and `Done` columns.
+- Dashboard: show meeting, transcript, summary, audio, sentiment, speaker, keyword, and action item statistics.
+- Export: export meeting content as PDF, DOCX, or JSON with Unicode Vietnamese support.
+
+### System Architecture
+
+```text
+Browser
+  |
+  | HTTP / WebSocket
+  v
+Frontend React/Vite :5173
+  |
+  | REST API
+  v
+Backend Node.js/Express :3001
+  |
+  | Prisma
+  v
+PostgreSQL :5432
+
+Backend Node.js
+  |
+  | HTTP multipart / JSON
+  v
+AI Server FastAPI :8000
+  |
+  | Local models + Ollama + Chroma
+  v
+STT / Diarization / Translation / LLM / RAG
+```
+
+The backend acts as the API gateway for the frontend and stores business data in PostgreSQL. The AI server isolates heavy model processing from the Node.js backend.
+
+### Folder Structure
+
+```text
+.
+├── app/                       # FastAPI AI server
+│   ├── main.py                # AI API entrypoint
+│   ├── config.py              # Model, GPU, Ollama, and Chroma configuration
+│   └── services/              # STT, diarization, pipeline, RAG, translation
+├── backend/                   # Node.js Express backend
+│   ├── prisma/                # Prisma schema, migrations, seed
+│   ├── scripts/               # API smoke tests
+│   └── src/                   # Config, controllers, routes, services, middleware
+├── frontend/                  # React/Vite frontend
+│   └── src/                   # Components, layouts, pages, routes, services, styles
+├── data/                      # Runtime data, uploads, processed files, Chroma
+├── uploads/                   # Runtime upload files
+├── docker-compose.yml         # Docker frontend/backend setup
+├── docker-compose.dev.yml     # Hot reload compose override
+├── .env.example               # AI server environment example
+├── .env.docker.example        # Docker environment example
+├── Dockerfile.ai              # Reference AI Dockerfile
+└── run.py                     # AI server launcher with pre-flight checks
+```
+
+### Tech Stack
+
+Frontend:
+
+- React 18
+- Vite
+- React Router
+- Tailwind CSS
+- Axios
+- Browser WebSocket API
+
+Backend:
+
+- Node.js 22+
+- Express.js
+- PostgreSQL
+- Prisma ORM
+- JWT authentication and role-based authorization
+- Zod validation
+- Swagger/OpenAPI
+- Multer upload
+- Winston logger
+- Helmet, CORS, rate limiting
+- PDFKit, docx
+- WebSocket `ws`
+
+AI server:
+
+- Python FastAPI
+- PyTorch
+- PhoWhisper / local STT model
+- Local speaker diarization model
+- Local VI -> EN and EN -> VI translation models
+- Ollama `qwen2.5:7b` for LLM
+- Ollama `nomic-embed-text` for embeddings
+- Chroma vector DB
+- FFmpeg
+
+### Requirements
+
+Required:
+
+- Node.js `22+`
+- npm
+- Python `3.10+` or a version compatible with the current AI dependencies
+- PostgreSQL
+- Docker Desktop
+- FFmpeg
+- Ollama
+
+Recommended for GPU AI processing:
+
+- NVIDIA GPU
+- CUDA runtime compatible with the installed PyTorch version
+- At least 4 GB VRAM
+- Low VRAM mode enabled:
+
+```env
+AI_LOW_VRAM_MODE=1
+PRELOAD_MODELS=0
+STT_DEVICE=cuda
+DIARIZATION_DEVICE=cuda
+STT_CHUNK_DURATION=15
+STT_MAX_NEW_TOKENS=256
+```
+
+### Environment Configuration
+
+AI server `.env`:
+
+```powershell
+copy .env.example .env
+```
+
+Important variables:
+
+```env
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_EMBED_MODEL=nomic-embed-text
+
+STT_MODEL_DIR=C:\Users\ADMIN\PhoWhisper-medium
+DIARIZATION_MODEL_DIR=.\diarization\speaker-diarization-community-1
+TRANSLATION_VI_EN_DIR=C:\Users\ADMIN\opus-mt-vi-en
+TRANSLATION_EN_VI_DIR=C:\Users\ADMIN\opus-mt-en-vi
+
+AI_LOW_VRAM_MODE=1
+PRELOAD_MODELS=0
+STT_DEVICE=cuda
+DIARIZATION_DEVICE=cuda
+```
+
+Docker environment:
+
+```powershell
+copy .env.docker.example .env.docker
+```
+
+Example:
+
+```env
+DOCKER_DATABASE_URL=postgresql://postgres:17122005@host.docker.internal:5432/ai_meeting_assistant?schema=public
+DOCKER_AI_SERVICE_URL=http://host.docker.internal:8000
+
+DATABASE_URL=postgresql://postgres:17122005@host.docker.internal:5432/ai_meeting_assistant?schema=public
+AI_SERVICE_URL=http://host.docker.internal:8000
+AUTH_DISABLED=true
+```
+
+Backend `.env` when running manually:
+
+```powershell
+cd backend
+copy .env.example .env
+```
+
+Example:
+
+```env
+PORT=3001
+DATABASE_URL=postgresql://postgres:17122005@localhost:5432/ai_meeting_assistant?schema=public
+AI_SERVICE_URL=http://localhost:8000
+FRONTEND_ORIGIN=http://localhost:5173
+AUTH_DISABLED=true
+```
+
+### Run With Docker
+
+Before starting Docker, run PostgreSQL and the AI server on the host machine.
+
+Start the AI server:
+
+```powershell
+python run.py
+```
+
+AI server:
+
+```text
+http://localhost:8000
+```
+
+API docs:
+
+```text
+http://localhost:8000/docs
+```
+
+Start frontend and backend with hot reload:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+Start in the background:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+```
+
+Service URLs:
+
+```text
+Frontend: http://localhost:5173
+Backend:  http://localhost:3001
+Swagger:  http://localhost:3001/docs
+Health:   http://localhost:3001/ready
+AI:       http://localhost:8000
+```
+
+### Run Services Manually
+
+Backend:
+
+```powershell
+cd backend
+copy .env.example .env
+npm install
+npx prisma migrate dev
+npm run prisma:seed
+npm run dev
+```
+
+Frontend:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+AI server:
+
+```powershell
+python run.py
+```
+
+Skip pre-flight checks if needed:
+
+```powershell
+python run.py --no-check
+```
+
+Use another port:
+
+```powershell
+python run.py --port 8080
+```
+
+### Database and Prisma
+
+Prisma schema:
+
+```text
+backend/prisma/schema.prisma
+```
+
+Main tables:
+
+- `users`
+- `meetings`
+- `meeting_participants`
+- `speakers`
+- `transcripts`
+- `summaries`
+- `meeting_keywords`
+- `meeting_files`
+- `action_items`
+- `user_bookmark_notes`
+- `system_logs`
+
+Migration:
+
+```powershell
+cd backend
+npx prisma migrate dev
+```
+
+Seed:
+
+```powershell
+npm run prisma:seed
+```
+
+Generate Prisma client:
+
+```powershell
+npm run prisma:generate
+```
+
+Deploy migrations:
+
+```powershell
+npm run prisma:deploy
+```
+
+### AI Server
+
+Common endpoints:
+
+```text
+GET  /health
+GET  /health/llm
+GET  /models/status
+POST /api/transcribe
+POST /api/diarize
+POST /api/process
+POST /api/translate
+POST /api/summarize
+POST /api/meetings/{meeting_id}/index
+POST /api/meetings/{meeting_id}/ask
+```
+
+`POST /api/process` is the main upload audio processing pipeline.
+
+### Audio Processing Flow
+
+Transcript-only mode:
+
+```text
+Audio upload
+  -> Normalize to 16kHz mono WAV
+  -> Run chunked STT
+  -> Stream transcript segments
+  -> Save transcripts with speaker_id = null
+  -> Save file metadata
+```
+
+Transcript + speaker labels:
+
+```text
+Audio upload
+  -> Normalize to 16kHz mono WAV
+  -> Run diarization
+  -> Split audio by speaker segments
+  -> Run STT on each segment
+  -> Merge transcripts by speaker
+  -> Stream segments
+  -> Save speakers + transcripts
+  -> Save file metadata
+```
+
+Low VRAM optimization:
+
+- Do not preload multiple models at the same time.
+- Run diarization and STT sequentially.
+- Release GPU memory after each step.
+- Reduce chunk duration and token budget.
+- Fall back to CPU when free GPU memory is too low.
+
+### Realtime Recording
+
+Frontend page:
+
+```text
+http://localhost:5173/recording
+```
+
+Backend WebSocket:
+
+```text
+ws://localhost:3001/ws/recording
+```
+
+Flow:
+
+```text
+Browser microphone
+  -> Audio chunks
+  -> WebSocket backend
+  -> AI server transcribe/process
+  -> transcript_segment event
+  -> Render live transcript
+```
+
+### RAG Q&A With Chroma
+
+For summary generation or transcript indexing, the system can:
+
+1. Load transcripts by `meetingId`.
+2. Split transcripts into smaller chunks.
+3. Embed each chunk with the Ollama embedding model.
+4. Store embeddings in Chroma.
+5. Embed a user's question.
+6. Retrieve top-k relevant chunks.
+7. Build a prompt with retrieved context.
+8. Call the local LLM.
+
+If retrieved chunks do not contain enough information, the LLM must answer:
+
+```text
+không đủ thông tin trong transcript
+```
+
+Default Chroma directory:
+
+```text
+%TEMP%\QLDA_AI_GHI_CUOC_HOP\chroma_meetings
+```
+
+Or configure:
+
+```env
+CHROMA_DB_DIR=...
+```
+
+### Frontend
+
+Main routes:
+
+- `/dashboard`
+- `/recording`
+- `/upload`
+- `/meetings`
+- `/meetings/:id`
+- `/meetings/new`
+- `/meetings/:id/edit`
+- `/action-items`
+- `/settings`
+
+Important files:
+
+```text
+frontend/src/services/api.js
+frontend/src/routes/index.jsx
+frontend/src/styles/index.css
+```
+
+### Backend API
+
+Swagger:
+
+```text
+http://localhost:3001/docs
+```
+
+Health:
+
+```text
+GET /ready
+```
+
+Meetings:
+
+```text
+GET    /meetings
+POST   /meetings
+GET    /meetings/:id
+PUT    /meetings/:id
+DELETE /meetings/:id
+```
+
+Transcripts:
+
+```text
+GET  /meetings/:meetingId/transcripts
+POST /meetings/:meetingId/transcripts
+PUT  /transcripts/:id
+POST /transcripts/:id/translate
+POST /meetings/:meetingId/transcripts/batch-translate
+```
+
+Summary and Q&A:
+
+```text
+GET  /meetings/:meetingId/summaries
+POST /meetings/:meetingId/summaries/generate
+POST /meetings/:meetingId/vector-index
+POST /meetings/:meetingId/qa
+```
+
+Export:
+
+```text
+GET /meetings/:id/export/:format
+```
+
+Supported export formats:
+
+- `pdf`
+- `docx`
+- `json`
+
+Transcript view query:
+
+```text
+?transcriptView=chunks
+?transcriptView=full
+```
+
+### Testing
+
+Backend tests:
+
+```powershell
+cd backend
+npm test
+```
+
+API smoke test:
+
+```powershell
+cd backend
+npm run smoke:test-api
+```
+
+Frontend build:
+
+```powershell
+cd frontend
+npm run build
+```
+
+AI LLM test:
+
+```powershell
+python scripts/test_ollama_llm.py
+```
+
+### Common Docker Commands
+
+Start development:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+Start in the background:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+```
+
+Restart frontend:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml restart frontend
+```
+
+Restart backend:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml restart backend
+```
+
+View logs:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml logs -f backend
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml logs -f frontend
+```
+
+Stop containers:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml down
+```
+
+### Git Push Guide
+
+Remote repository:
+
+```text
+https://github.com/vietTNT/QLDA-AI-GHI-CUOC-HOP.git
+```
+
+Check current changes:
+
+```powershell
+git status --short
+```
+
+Stage only the required files:
+
+```powershell
+git add README.md .gitignore
+```
+
+Review staged changes:
+
+```powershell
+git diff --cached
+```
+
+Commit:
+
+```powershell
+git commit -m "docs: add English README"
+```
+
+Push to the current branch:
+
+```powershell
+git push origin HEAD
+```
+
+If you need to push to `main` explicitly:
+
+```powershell
+git push origin HEAD:main
+```
+
+Do not commit runtime/generated content such as:
+
+- `.env`
+- `.env.docker`
+- `node_modules/`
+- `frontend/dist/`
+- `outputs/`
+- `uploads/`
+- local model folders
+- audio files generated during local testing
+
+### Troubleshooting
+
+Backend container reports `DATABASE_URL not found`:
+
+```env
+DOCKER_DATABASE_URL=postgresql://postgres:17122005@host.docker.internal:5432/ai_meeting_assistant?schema=public
+DATABASE_URL=postgresql://postgres:17122005@host.docker.internal:5432/ai_meeting_assistant?schema=public
+```
+
+Then restart backend:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml restart backend
+```
+
+`python run.py` reports `No module named torch`:
+
+```powershell
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python run.py
+```
+
+Ollama is not available:
+
+```powershell
+ollama list
+ollama pull qwen2.5:7b
+ollama pull nomic-embed-text
+```
+
+FFmpeg is missing:
+
+```env
+FFMPEG_BINARY=C:\path\to\ffmpeg.exe
+```
+
+GPU 4 GB out of memory:
+
+```env
+AI_LOW_VRAM_MODE=1
+PRELOAD_MODELS=0
+STT_CHUNK_DURATION=10
+STT_MAX_NEW_TOKENS=128
+DIARIZATION_DEVICE=cpu
+```
+
+### Security and Performance Notes
+
+Security:
+
+- Do not commit `.env` or `.env.docker` with real secrets.
+- Change JWT secrets before real deployment.
+- Disable `AUTH_DISABLED=true` when real login and authorization are required.
+- Restrict CORS with `FRONTEND_ORIGIN`.
+- Restrict uploads with `MAX_UPLOAD_MB`.
+- Use Helmet and rate limiting on the backend.
+- Do not expose the AI server directly to the internet without a proper auth/proxy layer.
+
+Performance:
+
+- PostgreSQL has indexes for common query fields.
+- Backend uses soft delete for main entities.
+- AI low VRAM mode avoids keeping STT and diarization models in GPU at the same time.
+- Chroma should be locked or queued when multiple indexing requests run concurrently.
+- For long transcripts, use RAG instead of putting the whole transcript into the LLM prompt.
+
+## Tiếng Việt
+
 Hệ thống AI Meeting Assistant hỗ trợ ghi âm cuộc họp, chuyển giọng nói thành văn bản, phân biệt người nói, dịch Anh - Việt, tóm tắt nội dung, hỏi đáp theo transcript dài bằng RAG, quản lý cuộc họp và theo dõi action items.
 
 ## Mục Lục
@@ -9,23 +779,23 @@ Hệ thống AI Meeting Assistant hỗ trợ ghi âm cuộc họp, chuyển gi�
 - [Tính năng chính](#tính-năng-chính)
 - [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
 - [Cấu trúc thư mục](#cấu-trúc-thư-mục)
-- [Tech stack](#tech-stack)
+- [Tech stack](#tech-stack-1)
 - [Yêu cầu môi trường](#yêu-cầu-môi-trường)
 - [Cấu hình môi trường](#cấu-hình-môi-trường)
 - [Chạy dự án bằng Docker](#chạy-dự-án-bằng-docker)
 - [Chạy thủ công từng service](#chạy-thủ-công-từng-service)
 - [Database và Prisma](#database-và-prisma)
-- [AI server](#ai-server)
+- [AI server](#ai-server-1)
 - [Luồng xử lý audio](#luồng-xử-lý-audio)
 - [Luồng phân biệt người nói kết hợp STT](#luồng-phân-biệt-người-nói-kết-hợp-stt)
-- [Realtime recording](#realtime-recording)
+- [Realtime recording](#realtime-recording-1)
 - [RAG Q&A với Chroma](#rag-qa-với-chroma)
-- [Frontend](#frontend)
-- [Backend API](#backend-api)
+- [Frontend](#frontend-1)
+- [Backend API](#backend-api-1)
 - [Export nội dung cuộc họp](#export-nội-dung-cuộc-họp)
 - [Kiểm thử](#kiểm-thử)
 - [Lệnh Docker thường dùng](#lệnh-docker-thường-dùng)
-- [Troubleshooting](#troubleshooting)
+- [Troubleshooting](#troubleshooting-1)
 - [Ghi chú bảo mật và hiệu năng](#ghi-chú-bảo-mật-và-hiệu-năng)
 
 ## Tổng quan
@@ -310,7 +1080,7 @@ Backend đóng vai trò API gateway cho frontend và lưu dữ liệu nghiệp v
   - VI -> EN
   - EN -> VI
 - Ollama:
-  - `qwen2.5:3b` cho LLM
+  - `qwen2.5:7b` cho LLM
   - `nomic-embed-text` cho embeddings
 - Chroma vector DB
 - FFmpeg
@@ -357,7 +1127,7 @@ Các biến quan trọng:
 
 ```env
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen2.5:3b
+OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_EMBED_MODEL=nomic-embed-text
 
 STT_MODEL_DIR=C:\Users\ADMIN\PhoWhisper-medium
@@ -1452,7 +2222,7 @@ ollama list
 Pull model nếu thiếu:
 
 ```powershell
-ollama pull qwen2.5:3b
+ollama pull qwen2.5:7b
 ollama pull nomic-embed-text
 ```
 

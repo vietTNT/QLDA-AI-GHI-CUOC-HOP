@@ -9,11 +9,17 @@ __pycache__/
 *.py[cod]
 *.log
 .pytest_cache/
+node_modules/
+outputs/
+uploads/
+backend/uploads/*
+!backend/uploads/.gitkeep
 
 # Local model files are large and should be downloaded locally, not committed.
 models/
 
-.env    
+.env
+.env.docker
 
 frontend/node_modules/
 diarization/
