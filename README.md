@@ -21,15 +21,19 @@ AI Meeting Assistant helps teams record meetings, transcribe speech to text, ide
 - [Database and Prisma](#database-and-prisma)
 - [AI Server](#ai-server)
 - [Audio Processing Flow](#audio-processing-flow)
+- [Speaker Diarization + STT Flow](#speaker-diarization--stt-flow)
 - [Realtime Recording](#realtime-recording)
 - [RAG Q&A With Chroma](#rag-qa-with-chroma)
 - [Frontend](#frontend)
 - [Backend API](#backend-api)
+- [Export Meeting Content](#export-meeting-content)
 - [Testing](#testing)
 - [Common Docker Commands](#common-docker-commands)
 - [Git Push Guide](#git-push-guide)
 - [Troubleshooting](#troubleshooting)
 - [Security and Performance Notes](#security-and-performance-notes)
+- [Accounts and Login](#accounts-and-login)
+- [Development Notes](#development-notes)
 
 ### Overview
 
@@ -62,11 +66,55 @@ Create/select a meeting
   -> Export meeting minutes as PDF/DOCX/JSON
 ```
 
+#### Business Actors
+
+- `Meeting organizer`: creates meetings, uploads audio, checks transcripts, and exports meeting minutes.
+- `Meeting participant`: appears in the participant list and can be referenced in speakers or action items.
+- `Minutes reviewer`: edits transcripts, renames speakers, adds notes, and confirms summaries.
+- `Manager`: monitors the dashboard, action items, meeting status, and work progress.
+- `AI service`: handles STT, diarization, translation, summarization, embeddings, and Q&A.
+
+#### Main Business Objects
+
+- `Meeting`: the central entity that groups all meeting data.
+- `Meeting File`: uploaded audio, video, or transcript file.
+- `Transcript`: timestamped speech content converted into text.
+- `Speaker`: a detected or user-corrected speaker in a meeting.
+- `Summary`: summarized meeting content.
+- `Action Item`: follow-up work created from or attached to a meeting.
+- `Keyword`: important terms extracted from transcripts.
+- `Note/Bookmark`: user notes or highlighted transcript segments.
+- `System Log`: operation and audit records.
+
+#### Important Business Rules
+
+- One meeting can have many transcript segments, speakers, summaries, files, action items, and notes.
+- In `Transcript only` mode, the system runs STT only and does not create speakers automatically.
+- In `Transcript + speaker labels` mode, the system runs diarization and assigns speakers to transcript segments.
+- Users can rename speakers or reassign speakers after AI processing.
+- Transcripts are stored by meeting ID for review, search, translation, summarization, and Q&A.
+- Summary and Q&A must use stored transcript content, not unrelated external data.
+- Long transcript Q&A uses Chroma retrieval before calling the LLM.
+- If retrieved context does not contain the answer, the LLM must answer `không đủ thông tin trong transcript`.
+- Action items use `Todo`, `InProgress`, and `Done` states and can be moved on the board.
+- Meeting export must match the active transcript view: `Chunks` or `Full text`.
+
+#### Business Value
+
+- Reduces time spent writing meeting minutes manually.
+- Helps avoid missing decisions, tasks, and important information.
+- Shows who said what and when.
+- Automatically generates summaries, keywords, and action items.
+- Helps managers track work created after meetings.
+- Enables natural-language Q&A over long meeting transcripts.
+- Makes meeting minutes easier to store and share as PDF, DOCX, or JSON.
+
 ### Main Features
 
 - Meeting management: create, update, soft-delete, search, filter, and view meeting details.
 - Audio upload and STT: upload audio, stream transcript chunks, and save transcripts to PostgreSQL.
 - Speaker diarization: detect speaker timelines and map transcript segments to speaker labels.
+- Speaker management: add speakers, rename speakers, and assign speakers to transcript chunks.
 - Realtime recording: stream browser microphone chunks through WebSocket and show live transcript output.
 - Translation: translate Vietnamese to English and English to Vietnamese with local models.
 - Summary and Q&A: summarize transcripts and answer questions with LLM + Chroma retrieval.
@@ -115,10 +163,27 @@ The backend acts as the API gateway for the frontend and stores business data in
 ├── backend/                   # Node.js Express backend
 │   ├── prisma/                # Prisma schema, migrations, seed
 │   ├── scripts/               # API smoke tests
-│   └── src/                   # Config, controllers, routes, services, middleware
+│   └── src/
+│       ├── config/            # env, prisma client
+│       ├── controllers/       # REST controllers
+│       ├── docs/              # Swagger/OpenAPI
+│       ├── dtos/              # Zod validation schemas
+│       ├── middleware/        # auth, validate, upload, error handler
+│       ├── repositories/      # Repository layer
+│       ├── routes/            # Express routes
+│       ├── services/          # Business logic
+│       ├── utils/             # logger, errors, jwt, pagination
+│       └── websocket/         # Recording WebSocket
 ├── frontend/                  # React/Vite frontend
-│   └── src/                   # Components, layouts, pages, routes, services, styles
+│   └── src/
+│       ├── components/
+│       ├── layouts/
+│       ├── pages/
+│       ├── routes/
+│       ├── services/
+│       └── styles/
 ├── data/                      # Runtime data, uploads, processed files, Chroma
+├── diarization/               # Local diarization model bundle
 ├── uploads/                   # Runtime upload files
 ├── docker-compose.yml         # Docker frontend/backend setup
 ├── docker-compose.dev.yml     # Hot reload compose override
@@ -438,6 +503,281 @@ Low VRAM optimization:
 - Reduce chunk duration and token budget.
 - Fall back to CPU when free GPU memory is too low.
 
+### Speaker Diarization + STT Flow
+
+In this system, speaker labeling is built by combining `diarization` and `PhoWhisper STT`.
+
+These components solve different problems:
+
+```text
+Diarization = who spoke and when
+PhoWhisper STT = what that person said
+```
+
+Diarization does not convert speech into text. It analyzes voice characteristics and returns a speaker timeline:
+
+```text
+SPEAKER_00  0.00s - 3.74s
+SPEAKER_01  3.80s - 7.20s
+SPEAKER_00  7.30s - 12.50s
+```
+
+PhoWhisper then transcribes each audio segment. After combining both outputs, the final transcript includes speaker labels, timestamps, and text:
+
+```text
+SPEAKER_00  0.00s - 3.74s: Hello everyone...
+SPEAKER_01  3.80s - 7.20s: I will report the dashboard progress...
+SPEAKER_00  7.30s - 12.50s: What is still missing on the backend?
+```
+
+General flow:
+
+```text
+Input audio
+  -> Normalize audio
+  -> Run diarization
+  -> Receive speaker timeline
+  -> Cut audio by speaker segments
+  -> Run PhoWhisper STT on each segment
+  -> Attach text to the matching speaker
+  -> Offset timestamps back to the original timeline
+  -> Merge nearby segments from the same speaker
+  -> Save speakers + transcripts to the database
+  -> Display and edit in Meeting Detail
+```
+
+#### Input Audio
+
+Audio can come from:
+
+- An uploaded audio file.
+- Realtime browser microphone recording.
+
+Common formats:
+
+```text
+mp3, wav, m4a, webm
+```
+
+The AI pipeline receives the file and prepares it for model processing.
+
+#### Audio Normalization
+
+Audio is converted into a consistent format:
+
+```text
+16kHz
+mono
+wav
+float32
+```
+
+This improves STT stability, gives diarization a consistent input format, reduces codec issues on Windows, lowers memory pressure, and makes timestamp-based splitting easier.
+
+#### Speaker Diarization
+
+Diarization answers:
+
+```text
+Who is speaking at each time range?
+```
+
+It does not know real speaker names. It creates temporary labels:
+
+```text
+SPEAKER_00
+SPEAKER_01
+SPEAKER_02
+```
+
+Example:
+
+```text
+0s  - 5s   Nam speaks
+5s  - 9s   Lan speaks
+9s  - 13s  Nam speaks again
+13s - 16s  Lan speaks again
+```
+
+Diarization does not know the names, but it can detect that the voice in `0s - 5s` is similar to `9s - 13s`, and the voice in `5s - 9s` is similar to `13s - 16s`.
+
+Output:
+
+```text
+SPEAKER_00  0s  - 5s
+SPEAKER_01  5s  - 9s
+SPEAKER_00  9s  - 13s
+SPEAKER_01  13s - 16s
+```
+
+After processing, users can rename:
+
+```text
+SPEAKER_00 -> Nam
+SPEAKER_01 -> Lan
+```
+
+#### How Diarization Separates Speakers
+
+Diarization compares voice characteristics, not sentence content.
+
+Typical internal steps:
+
+1. Voice Activity Detection detects speech, silence, and noise.
+2. Audio is split into short analysis windows.
+3. A speaker embedding vector is extracted from each window.
+4. Similar embeddings are clustered into the same speaker group.
+5. The model returns the final speaker timeline.
+
+Speaker embeddings capture properties such as tone, pitch, speech energy, acoustic patterns, pronunciation, and speaking rhythm.
+
+Diarization does not directly classify gender. It does not use rules such as `low voice = male` or `high voice = female`; it groups segments by similarity of voice characteristics.
+
+#### Cutting Audio by Speaker Segments
+
+After diarization returns the timeline, the original audio is split into smaller files:
+
+```text
+full_audio.wav
+  -> segment_001.wav  0.00s - 3.74s   SPEAKER_00
+  -> segment_002.wav  3.80s - 7.20s   SPEAKER_01
+  -> segment_003.wav  7.30s - 12.50s  SPEAKER_00
+```
+
+Each segment keeps metadata:
+
+```json
+{
+  "speaker": "SPEAKER_00",
+  "start": 0.0,
+  "end": 3.74,
+  "audio": "segment_001.wav"
+}
+```
+
+#### PhoWhisper STT Per Segment
+
+PhoWhisper transcribes each speaker segment:
+
+```text
+segment_001.wav -> "Hello everyone, today we will discuss project progress."
+segment_002.wav -> "I have completed the dashboard interface."
+segment_003.wav -> "Good, what is still missing on the backend?"
+```
+
+Because each segment already has a speaker label from diarization, the system can attach text to the correct speaker:
+
+```json
+{
+  "speaker": "SPEAKER_00",
+  "start": 0.0,
+  "end": 3.74,
+  "text": "Hello everyone, today we will discuss project progress."
+}
+```
+
+#### Timestamp Offset
+
+When PhoWhisper transcribes a short segment, internal timestamps may start at `0s`. If the original segment begins at `30.00s`, the system adds the offset:
+
+```text
+30.00s + 0.00s = 30.00s
+30.00s + 2.10s = 32.10s
+```
+
+This keeps the final transcript aligned with the original audio timeline.
+
+#### Merge Nearby Segments
+
+If diarization or STT creates many adjacent chunks from the same speaker, the system can merge them.
+
+Before merge:
+
+```text
+SPEAKER_00 0.00s - 2.00s: Hello everyone
+SPEAKER_00 2.10s - 4.00s: today we will meet
+SPEAKER_01 4.20s - 6.00s: I will report
+```
+
+After merge:
+
+```text
+SPEAKER_00 0.00s - 4.00s: Hello everyone today we will meet
+SPEAKER_01 4.20s - 6.00s: I will report
+```
+
+This makes transcripts easier to read, reduces fragmented chunks in the UI, improves exports, and gives summarization/Q&A more coherent context.
+
+#### Database Save
+
+Speakers are saved in the `speakers` table:
+
+```text
+speakers
+- id
+- meeting_id
+- speaker_label: SPEAKER_00
+- real_name: null
+- color_hex
+```
+
+Transcripts are saved in the `transcripts` table:
+
+```text
+transcripts
+- meeting_id
+- speaker_id
+- start_timestamp
+- end_timestamp
+- original_text
+- translated_text
+- sentiment_label
+- behavior_label
+- is_highlighted
+```
+
+#### UI Review and Correction
+
+In Meeting Detail, users can:
+
+- Rename speakers.
+- Add speakers.
+- Reassign speakers to chunks.
+- View transcripts by chunks.
+- View transcript as full text.
+- Translate transcript content.
+- Export meeting minutes.
+
+#### Cases Where Diarization Can Be Wrong
+
+Diarization can be less accurate when:
+
+- Multiple people speak at the same time.
+- Audio has heavy noise or echo.
+- The microphone is too far away.
+- One speaker talks very little.
+- Two people have very similar voices.
+- Music or non-speech audio appears in the recording.
+- Speech segments are too short.
+- The model guesses the wrong number of speakers.
+- A speaker changes microphone or volume during the meeting.
+
+The UI therefore allows users to correct speaker labels after AI processing.
+
+#### Transcript-Only Mode
+
+If users choose `Transcript only`, the pipeline skips diarization:
+
+```text
+Audio
+  -> normalize
+  -> PhoWhisper STT by chunks
+  -> stream transcript segments
+  -> save transcripts with speaker_id = null
+```
+
+The system does not create a default `SPEAKER_00`. This mode is suitable for single-speaker meetings or when speaker separation is not needed.
+
 ### Realtime Recording
 
 Frontend page:
@@ -578,6 +918,27 @@ Transcript view query:
 ?transcriptView=full
 ```
 
+### Export Meeting Content
+
+Export PDF by chunks:
+
+```text
+GET /meetings/{meetingId}/export/pdf?transcriptView=chunks
+```
+
+Export PDF as full text:
+
+```text
+GET /meetings/{meetingId}/export/pdf?transcriptView=full
+```
+
+PDF export uses Unicode fonts to display Vietnamese correctly. In Docker, the backend image installs `ttf-dejavu` and registers:
+
+- `DejaVuSans`
+- `DejaVuSans-Bold`
+
+DOCX export uses `Arial`.
+
 ### Testing
 
 Backend tests:
@@ -645,6 +1006,26 @@ Stop containers:
 ```powershell
 docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml down
 ```
+
+Check Docker disk usage:
+
+```powershell
+docker system df
+```
+
+Clean unused build cache:
+
+```powershell
+docker builder prune
+```
+
+Clean unused images and containers:
+
+```powershell
+docker system prune
+```
+
+Do not use `docker system prune -a --volumes` unless you are sure the volumes do not contain data you need.
 
 ### Git Push Guide
 
@@ -767,6 +1148,31 @@ Performance:
 - AI low VRAM mode avoids keeping STT and diarization models in GPU at the same time.
 - Chroma should be locked or queued when multiple indexing requests run concurrently.
 - For long transcripts, use RAG instead of putting the whole transcript into the LLM prompt.
+
+### Accounts and Login
+
+The current project configuration uses:
+
+```env
+AUTH_DISABLED=true
+```
+
+This means the frontend does not use login/register in the main workflow. The backend still keeps auth, JWT, and role modules so real authentication can be enabled later.
+
+### Development Notes
+
+When editing frontend or backend code in Docker dev mode, source files are mounted into containers, so rebuilding images is usually not required. Restart containers only when the dev server does not reload automatically:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml restart frontend
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml restart backend
+```
+
+When changing Dockerfiles, dependencies, or package lock files, rebuild:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+```
 
 ## Tiếng Việt
 
